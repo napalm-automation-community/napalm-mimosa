@@ -1,5 +1,7 @@
 from napalm.base.base import NetworkDriver
 from pysnmp.hlapi import *
+from ipaddress import ip_network, ip_address
+from rich import print
 
 
 class MimosaDriver(NetworkDriver):
@@ -45,22 +47,54 @@ class MimosaDriver(NetworkDriver):
         if errorIndication or errorStatus:
             return None
 
-        result = varBinds[0][1].prettyPrint()  # return the value
+        result = varBinds[0][1]
 
-        # Check if the result is a hexadecimal string
-        if result.startswith("0x"):
-            # Convert from hex to string
-            result = bytes.fromhex(result[2:]).decode("utf-8").rstrip("\n")
+        return result.prettyPrint()
+
+    def _snmp_get_multiple(self, mib, oid=None):
+        if mib.startswith("."):
+            # OID provided, not MIB
+            object_id = ObjectType(ObjectIdentity(mib))
+        else:
+            # MIB and OID provided
+            object_id = ObjectType(ObjectIdentity(mib, oid))
+
+        result = []
+
+        for errorIndication, errorStatus, errorIndex, varBinds in nextCmd(
+            SnmpEngine(),
+            CommunityData(self.snmp_community),
+            UdpTransportTarget((self.hostname, 161)),
+            ContextData(),
+            object_id,
+            lexicographicMode=False,
+        ):
+            if errorIndication or errorStatus:
+                return None
+
+            result.extend([varBind[-1].prettyPrint() for varBind in varBinds])
 
         return result
 
     def get_facts(self):
+        # map sysObjectID values to model names
+        model_map = {
+            "SNMPv2-SMI::enterprises.43356.1.1.1": "mimosaB5",
+            "SNMPv2-SMI::enterprises.43356.1.1.2": "mimosaB5Lite",
+            "SNMPv2-SMI::enterprises.43356.1.1.3": "mimosaA5",
+            "SNMPv2-SMI::enterprises.43356.1.1.4": "mimosaC5",
+        }
+
+        sysObjectID = self._snmp_get("SNMPv2-MIB", "sysObjectID")
+
         facts = {
             "uptime": self._snmp_get("SNMPv2-MIB", "sysUpTime"),
             "vendor": "Mimosa",
             "os_version": self._snmp_get(".1.3.6.1.4.1.43356.2.1.2.1.3.0"),
             "serial_number": self._snmp_get(".1.3.6.1.4.1.43356.2.1.2.1.2.0"),
-            "model": self._snmp_get("SNMPv2-MIB", "sysDescr"),
+            "model": model_map.get(
+                sysObjectID, "Unknown"
+            ),  # map the sysObjectID to a model
             "hostname": self._snmp_get("SNMPv2-MIB", "sysName"),
             "fqdn": self._snmp_get("SNMPv2-MIB", "sysName"),
             "interface_list": self.get_interfaces_list(),  # SNMP does not typically provide this info
@@ -68,21 +102,8 @@ class MimosaDriver(NetworkDriver):
         return facts
 
     def get_interfaces_list(self):
-        interfaces = []
-        for errorIndication, errorStatus, errorIndex, varBinds in nextCmd(
-            SnmpEngine(),
-            CommunityData(self.snmp_community),
-            UdpTransportTarget((self.hostname, 161)),
-            ContextData(),
-            ObjectType(ObjectIdentity("IF-MIB", "ifDescr")),
-            lexicographicMode=False,
-        ):
-            if errorIndication or errorStatus:
-                return []
-            else:
-                for varBind in varBinds:
-                    interfaces.append(str(varBind[-1]))
-        return interfaces
+        interfaces = self._snmp_get_multiple("IF-MIB", "ifDescr")
+        return interfaces if interfaces is not None else []
 
     def get_interfaces(self):
         interfaces = {}
@@ -148,3 +169,26 @@ class MimosaDriver(NetworkDriver):
             processed_interfaces[interface_name] = interface
 
         return processed_interfaces
+
+    def get_interfaces_ip(self):
+        interfaces_ip = {}
+
+        # OIDs for the different interface IP data we want to collect
+        oids = {
+            "mimosa_local_ip": ".1.3.6.1.4.1.43356.2.1.2.5.8.0",
+            "mimosa_netmask": ".1.3.6.1.4.1.43356.2.1.2.5.9.0",
+        }
+
+        # Retrieve the IP address and netmask from the device
+        ip_address = self._snmp_get(oids["mimosa_local_ip"])
+        netmask = self._snmp_get(oids["mimosa_netmask"])
+        # Convert the netmask to a prefix length
+        network = ip_network(f"{ip_address}/{netmask}", strict=False)
+        prefix_length = network.prefixlen
+
+        # Structure the returned data to match the example
+        interfaces_ip["br_local"] = {}
+        interfaces_ip["br_local"]["ipv4"] = {}
+        interfaces_ip["br_local"]["ipv4"][ip_address] = {"prefix_length": prefix_length}
+
+        return interfaces_ip
