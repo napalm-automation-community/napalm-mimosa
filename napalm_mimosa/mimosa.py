@@ -51,13 +51,8 @@ class MimosaDriver(NetworkDriver):
 
         return result.prettyPrint()
 
-    def _snmp_get_multiple(self, mib, oid=None):
-        if mib.startswith("."):
-            # OID provided, not MIB
-            object_id = ObjectType(ObjectIdentity(mib))
-        else:
-            # MIB and OID provided
-            object_id = ObjectType(ObjectIdentity(mib, oid))
+    def _snmp_get_multiple(self, oid):
+        object_id = ObjectType(ObjectIdentity(oid))
 
         result = []
 
@@ -76,6 +71,31 @@ class MimosaDriver(NetworkDriver):
 
         return result
 
+    def _snmp_get_multiple_with_index(self, oid):
+        object_id = ObjectType(ObjectIdentity(oid))
+
+        result = []
+
+        for errorIndication, errorStatus, errorIndex, varBinds in nextCmd(
+            SnmpEngine(),
+            CommunityData(self.snmp_community),
+            UdpTransportTarget((self.hostname, 161)),
+            ContextData(),
+            object_id,
+            lexicographicMode=False,
+        ):
+            if errorIndication or errorStatus:
+                return None
+
+            result.extend(
+                [
+                    (str(varBind[0]).split(".")[-1], varBind[-1].prettyPrint())
+                    for varBind in varBinds
+                ]
+            )
+
+        return result
+
     def get_facts(self):
         # map sysObjectID values to model names
         model_map = {
@@ -85,24 +105,24 @@ class MimosaDriver(NetworkDriver):
             "SNMPv2-SMI::enterprises.43356.1.1.4": "mimosaC5",
         }
 
-        sysObjectID = self._snmp_get("SNMPv2-MIB", "sysObjectID")
+        sysObjectID = self._snmp_get(".1.3.6.1.2.1.1.2.0")
 
         facts = {
-            "uptime": self._snmp_get("SNMPv2-MIB", "sysUpTime"),
+            "uptime": self._snmp_get(".1.3.6.1.2.1.1.3.0"),
             "vendor": "Mimosa",
             "os_version": self._snmp_get(".1.3.6.1.4.1.43356.2.1.2.1.3.0"),
             "serial_number": self._snmp_get(".1.3.6.1.4.1.43356.2.1.2.1.2.0"),
             "model": model_map.get(
                 sysObjectID, "Unknown"
             ),  # map the sysObjectID to a model
-            "hostname": self._snmp_get("SNMPv2-MIB", "sysName"),
-            "fqdn": self._snmp_get("SNMPv2-MIB", "sysName"),
+            "hostname": self._snmp_get(".1.3.6.1.2.1.1.5.0"),
+            "fqdn": self._snmp_get(".1.3.6.1.2.1.1.5.0"),
             "interface_list": self.get_interfaces_list(),  # SNMP does not typically provide this info
         }
         return facts
 
     def get_interfaces_list(self):
-        interfaces = self._snmp_get_multiple("IF-MIB", "ifDescr")
+        interfaces = self._snmp_get_multiple("1.3.6.1.2.1.2.2.1.2")
         return interfaces if interfaces is not None else []
 
     def get_interfaces(self):
@@ -120,30 +140,14 @@ class MimosaDriver(NetworkDriver):
 
         # Get interface data
         for oid_name, oid in oids.items():
-            for errorIndication, errorStatus, errorIndex, varBinds in nextCmd(
-                SnmpEngine(),
-                CommunityData(self.snmp_community),
-                UdpTransportTarget((self.hostname, 161)),
-                ContextData(),
-                ObjectType(ObjectIdentity(oid)),
-                lexicographicMode=False,
-            ):
-                if errorIndication or errorStatus:
-                    return {}
+            results = self._snmp_get_multiple_with_index(oid)
+            if results is None:
+                return {}
 
-                for varBind in varBinds:
-                    try:
-                        interface_index = str(varBind[0].getOid()[-1])
-                    except Exception as e:
-                        print(
-                            f"Error while extracting index from OID: {varBind[0].prettyPrint()}. Error message: {str(e)}"
-                        )
-                        continue
-
-                    interface_value = str(varBind[1])
-                    if interface_index not in interfaces:
-                        interfaces[interface_index] = {}
-                    interfaces[interface_index][oid_name] = interface_value
+            for interface_index, interface_value in results:
+                if interface_index not in interfaces:
+                    interfaces[interface_index] = {}
+                interfaces[interface_index][oid_name] = interface_value
 
         # Post-process the interface data
         processed_interfaces = {}
@@ -159,9 +163,15 @@ class MimosaDriver(NetworkDriver):
 
             if "ifPhysAddress" in interface:
                 phys_addr = interface.pop("ifPhysAddress")
-                interface["mac_address"] = ":".join(
-                    [f"{ord(c):02x}" for c in phys_addr]
-                )
+                # Ensure the MAC address has correct length and format
+                if phys_addr.startswith("0x"):
+                    # Convert hexadecimal string to proper MAC format
+                    formatted_mac = ":".join(
+                        [phys_addr[i : i + 2] for i in range(2, len(phys_addr), 2)]
+                    )
+                    interface["mac_address"] = formatted_mac
+                else:
+                    interface["mac_address"] = ""
             else:
                 interface["mac_address"] = ""
 
@@ -192,3 +202,103 @@ class MimosaDriver(NetworkDriver):
         interfaces_ip["br_local"]["ipv4"][ip_address] = {"prefix_length": prefix_length}
 
         return interfaces_ip
+
+    def get_wireless_settings(self):
+        wan_status_mapping = {
+            "1": "connected",
+            "2": "disconnected",
+        }
+
+        wireless_mode_mapping = {
+            "1": "accessPoint",
+            "2": "station",
+        }
+
+        tdma_mode_mapping = {
+            "1": "a",
+            "2": "b",
+        }
+
+        traffic_split_mapping = {
+            "1": "symmetric",
+            "2": "asymmetric",
+            "3": "auto",
+        }
+
+        network_mode_mapping = {
+            "1": "enabled",
+            "2": "disabled",
+            "3": "auto",
+        }
+
+        wireless_settings = {
+            "unlock_code": self._snmp_get(".1.3.6.1.4.1.43356.2.1.2.1.6.0"),
+            "regulatory_domain": self._snmp_get(".1.3.6.1.4.1.43356.2.1.2.1.9.0"),
+            "wan_ssid": self._snmp_get(".1.3.6.1.4.1.43356.2.1.2.3.1.0"),
+            "wan_status": wan_status_mapping.get(
+                self._snmp_get(".1.3.6.1.4.1.43356.2.1.2.3.3.0"), "unknown"
+            ),
+            "wireless_mode": wireless_mode_mapping.get(
+                self._snmp_get(".1.3.6.1.4.1.43356.2.1.2.4.1.0"), "unknown"
+            ),
+            "tdma_mode": tdma_mode_mapping.get(
+                self._snmp_get(".1.3.6.1.4.1.43356.2.1.2.4.2.0"), "unknown"
+            ),
+            "tdma_window": self._snmp_get(".1.3.6.1.4.1.43356.2.1.2.4.4.0"),
+            "traffic_split": traffic_split_mapping.get(
+                self._snmp_get(".1.3.6.1.4.1.43356.2.1.2.4.5.0"), "unknown"
+            ),
+            "network_mode": network_mode_mapping.get(
+                self._snmp_get(".1.3.6.1.4.1.43356.2.1.2.5.1.0"), "unknown"
+            ),
+            "recovery_ssid": self._snmp_get(".1.3.6.1.4.1.43356.2.1.2.5.2.0"),
+            "local_ssid": self._snmp_get(".1.3.6.1.4.1.43356.2.1.2.5.3.0"),
+            "local_channel": self._snmp_get(".1.3.6.1.4.1.43356.2.1.2.5.4.0 "),
+        }
+        return wireless_settings
+
+    def get_dns_servers(self):
+        dns_servers = {
+            "primary_dns_server": self._snmp_get(".1.3.6.1.4.1.43356.2.1.2.5.12.0"),
+            "secondary_dns_server": self._snmp_get(".1.3.6.1.4.1.43356.2.1.2.5.13.0"),
+        }
+
+        return dns_servers
+
+    def get_services(self):
+        https_status_mapping = {
+            "1": "enabled",
+            "2": "disabled",
+        }
+
+        mgmt_vlan_mapping = {
+            "1": "enabled",
+            "2": "disabled",
+        }
+
+        mgmt_cloud_mapping = {
+            "1": "enabled",
+            "2": "disabled",
+        }
+
+        syslog_mapping = {
+            "1": "enabled",
+            "2": "disabled",
+        }
+
+        services = {
+            "https_status": https_status_mapping.get(
+                self._snmp_get(".1.3.6.1.4.1.43356.2.1.2.8.1.0"), "unknown"
+            ),
+            "mgmt_vlan_status": mgmt_vlan_mapping.get(
+                self._snmp_get(".1.3.6.1.4.1.43356.2.1.2.8.2.0"), "unknown"
+            ),
+            "mgmt_cloud_status": mgmt_cloud_mapping.get(
+                self._snmp_get(".1.3.6.1.4.1.43356.2.1.2.8.3.0"), "unknown"
+            ),
+            "syslog_status": syslog_mapping.get(
+                self._snmp_get(".1.3.6.1.4.1.43356.2.1.2.8.6.0"), "unknown"
+            ),
+        }
+
+        return services
