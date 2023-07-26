@@ -1,24 +1,128 @@
+"""
+Napalm driver for Mimosa. This driver does not establish a connection with the device;
+instead, it utilizes SNMP to gather information.
+
+Please refer to napalm.readthedocs.org for more information.
+
+"""
+
 from napalm.base.base import NetworkDriver
 from pysnmp.hlapi import *
-from ipaddress import ip_network, ip_address
+from ipaddress import ip_network
 from rich import print
 
 
 class MimosaDriver(NetworkDriver):
+    ptp_OIDs = {
+        # OIDs for the ptp series
+        "unlock_code": ".1.3.6.1.4.1.43356.2.1.2.1.6.0",
+        "regulatory_domain": ".1.3.6.1.4.1.43356.2.1.2.1.9.0",
+        "wan_ssid": ".1.3.6.1.4.1.43356.2.1.2.3.1.0",
+        "wan_status": ".1.3.6.1.4.1.43356.2.1.2.3.3.0",
+        "wireless_mode": ".1.3.6.1.4.1.43356.2.1.2.4.1.0",
+        "tdma_mode": ".1.3.6.1.4.1.43356.2.1.2.4.2.0",
+        "tdma_window": ".1.3.6.1.4.1.43356.2.1.2.4.4.0",
+        "traffic_split": ".1.3.6.1.4.1.43356.2.1.2.4.5.0",
+        "network_mode": ".1.3.6.1.4.1.43356.2.1.2.5.1.0",
+        "recovery_ssid": ".1.3.6.1.4.1.43356.2.1.2.5.2.0",
+        "local_ssid": ".1.3.6.1.4.1.43356.2.1.2.5.3.0",
+        "local_channel": ".1.3.6.1.4.1.43356.2.1.2.5.4.0",
+        "mimosa_local_ip": ".1.3.6.1.4.1.43356.2.1.2.5.8.0",
+        "mimosa_netmask": ".1.3.6.1.4.1.43356.2.1.2.5.9.0",
+        "primary_dns_server": ".1.3.6.1.4.1.43356.2.1.2.5.12.0",
+        "secondary_dns_server": ".1.3.6.1.4.1.43356.2.1.2.5.13.0",
+    }
+
+    ptmp_OIDs = {
+        # OIDs for the ptmp series
+        "unlock_code": ".1.3.6.1.4.1.43356.2.1.2.1.6.0",
+        "regulatory_domain": ".1.3.6.1.4.1.43356.2.1.2.1.9.0",
+        "mimosa_local_ip": ".1.3.6.1.4.1.43356.2.1.2.9.7.1.0",
+        "mimosa_netmask": ".1.3.6.1.4.1.43356.2.1.2.9.7.2.0",
+        "mimosa_ssid_list": ".1.3.6.1.4.1.43356.2.1.2.9.1.1",
+        "mimosa_wireless_mode": ".1.3.6.1.4.1.43356.2.1.2.9.2.1.0",
+        "mimosa_auto_channel": ".1.3.6.1.4.1.43356.2.1.2.9.3.1.0",
+        "primary_dns_server": ".1.3.6.1.4.1.43356.2.1.2.9.7.5.0",
+        "secondary_dns_server": ".1.3.6.1.4.1.43356.2.1.2.9.7.6.0",
+        "mgmt_vlan_status": ".1.3.6.1.4.1.43356.2.1.2.9.7.7.0",
+        "mgmt_vlan_passthrough": ".1.3.6.1.4.1.43356.2.1.2.9.7.9.0",
+    }
+
+    wan_status_mapping = {
+        "1": "connected",
+        "2": "disconnected",
+    }
+
+    wireless_mode_mapping = {
+        "1": "accessPoint",
+        "2": "station",
+    }
+
+    tdma_mode_mapping = {
+        "1": "a",
+        "2": "b",
+    }
+
+    traffic_split_mapping = {
+        "1": "symmetric",
+        "2": "asymmetric",
+        "3": "auto",
+    }
+
+    network_mode_mapping = {
+        "1": "enabled",
+        "2": "disabled",
+        "3": "auto",
+    }
+
+    enabled_disabled_mapping = {
+        "1": "enabled",
+        "0": "disabled",
+    }
+
+    ptmp_true_false_mapping = {"1": "true", "2": "false"}
+
+    ptmp_wireless_mode_mapping = {
+        "1": "srs",
+        "2": "wifiinterop",
+    }
+
+    ptmp_ssid_type_mapping = {"0": "hotspot", "1": "cpe"}
+
+    ptmp_on_off_mapping = {"1": "on", "0": "off"}
+
     def __init__(
         self,
-        hostname,
-        username,
-        password,
-        timeout=60,
-        snmp_community="public",
+        snmp_community,
+        radio_type,
+        hostname=None,
+        username=None,
+        password=None,
         optional_args=None,
-    ):
+        timeout=60,
+    ) -> None:
+        """
+        :param snmp_community: SNMP community string
+        :param radio_type: Type of radio, either "ptp" or "ptmp"
+        :param hostname: IP or FQDN of the device you want to connect to.
+        :param username: No username required for SNMP
+        :param password: No password required for SNMP
+        :param optional_args: Pass additional arguments to underlying driver
+        :return:
+        """
         self.hostname = hostname
         self.username = username
         self.password = password
         self.timeout = timeout
         self.snmp_community = snmp_community
+        self.radio_type = radio_type
+        self.OIDs = self.ptp_OIDs if self.radio_type == "ptp" else self.ptmp_OIDs
+        self.validate_series()
+
+    def validate_series(self):
+        radio_type = ["ptp", "ptmp"]
+        if self.radio_type not in radio_type:
+            raise ValueError(f"Invalid series. Series should be one of {radio_type}")
 
     def open(self):
         pass  # we don't need to open a connection for SNMP
@@ -44,12 +148,21 @@ class MimosaDriver(NetworkDriver):
             )
         )
 
-        if errorIndication or errorStatus:
-            return None
+        if errorIndication:
+            raise Exception(f"SNMP Error: {errorIndication}")
+        elif errorStatus:
+            raise Exception(f"SNMP Error: {errorStatus.prettyPrint()}")
 
         result = varBinds[0][1]
+        result = result.prettyPrint()
 
-        return result.prettyPrint()
+        if result.startswith("0x"):  # Check if result is a hexadecimal string
+            hex_string = result[2:]  # Remove '0x' at the start
+            bytes_object = bytes.fromhex(hex_string)
+            ascii_string = bytes_object.decode("ASCII")
+            return ascii_string.strip()
+
+        return result
 
     def _snmp_get_multiple(self, oid):
         object_id = ObjectType(ObjectIdentity(oid))
@@ -64,8 +177,10 @@ class MimosaDriver(NetworkDriver):
             object_id,
             lexicographicMode=False,
         ):
-            if errorIndication or errorStatus:
-                return None
+            if errorIndication:
+                raise Exception(f"SNMP Error: {errorIndication}")
+            elif errorStatus:
+                raise Exception(f"SNMP Error: {errorStatus.prettyPrint()}")
 
             result.extend([varBind[-1].prettyPrint() for varBind in varBinds])
 
@@ -84,8 +199,10 @@ class MimosaDriver(NetworkDriver):
             object_id,
             lexicographicMode=False,
         ):
-            if errorIndication or errorStatus:
-                return None
+            if errorIndication:
+                raise Exception(f"SNMP Error: {errorIndication}")
+            elif errorStatus:
+                raise Exception(f"SNMP Error: {errorStatus.prettyPrint()}")
 
             result.extend(
                 [
@@ -97,208 +214,284 @@ class MimosaDriver(NetworkDriver):
         return result
 
     def get_facts(self):
-        # map sysObjectID values to model names
-        model_map = {
-            "SNMPv2-SMI::enterprises.43356.1.1.1": "mimosaB5",
-            "SNMPv2-SMI::enterprises.43356.1.1.2": "mimosaB5Lite",
-            "SNMPv2-SMI::enterprises.43356.1.1.3": "mimosaA5",
-            "SNMPv2-SMI::enterprises.43356.1.1.4": "mimosaC5",
-        }
+        try:
+            # map sysObjectID values to model names
+            model_map = {
+                "SNMPv2-SMI::enterprises.43356.1.1.1": "mimosaB5",
+                "SNMPv2-SMI::enterprises.43356.1.1.2": "mimosaB5Lite",
+                "SNMPv2-SMI::enterprises.43356.1.1.3": "mimosaA5",
+                "SNMPv2-SMI::enterprises.43356.1.1.4": "mimosaC5",
+            }
 
-        sysObjectID = self._snmp_get(".1.3.6.1.2.1.1.2.0")
+            sysObjectID = self._snmp_get(".1.3.6.1.2.1.1.2.0")
 
-        facts = {
-            "uptime": self._snmp_get(".1.3.6.1.2.1.1.3.0"),
-            "vendor": "Mimosa",
-            "os_version": self._snmp_get(".1.3.6.1.4.1.43356.2.1.2.1.3.0"),
-            "serial_number": self._snmp_get(".1.3.6.1.4.1.43356.2.1.2.1.2.0"),
-            "model": model_map.get(
-                sysObjectID, "Unknown"
-            ),  # map the sysObjectID to a model
-            "hostname": self._snmp_get(".1.3.6.1.2.1.1.5.0"),
-            "fqdn": self._snmp_get(".1.3.6.1.2.1.1.5.0"),
-            "interface_list": self.get_interfaces_list(),  # SNMP does not typically provide this info
-        }
-        return facts
+            facts = {
+                "uptime": self._snmp_get(".1.3.6.1.2.1.1.3.0"),
+                "vendor": "Mimosa",
+                "os_version": self._snmp_get(".1.3.6.1.4.1.43356.2.1.2.1.3.0"),
+                "serial_number": self._snmp_get(".1.3.6.1.4.1.43356.2.1.2.1.2.0"),
+                "model": model_map.get(
+                    sysObjectID, "Unknown"
+                ),  # map the sysObjectID to a model
+                "hostname": self._snmp_get(".1.3.6.1.2.1.1.5.0"),
+                "fqdn": self._snmp_get(".1.3.6.1.2.1.1.5.0"),
+                "interface_list": self.get_interfaces_list(),
+            }
+            return facts
+        except Exception as e:
+            return f"Error getting facts: {e}"
 
     def get_interfaces_list(self):
-        interfaces = self._snmp_get_multiple("1.3.6.1.2.1.2.2.1.2")
-        return interfaces if interfaces is not None else []
+        try:
+            interfaces = self._snmp_get_multiple("1.3.6.1.2.1.2.2.1.2")
+            return interfaces if interfaces is not None else []
+        except Exception as e:
+            return f"Error getting interface list: {e}"
 
     def get_interfaces(self):
-        interfaces = {}
+        try:
+            interfaces = {}
 
-        # OIDs for the different interface data we want to collect
-        oids = {
-            "ifDescr": "1.3.6.1.2.1.2.2.1.2",
-            "ifOperStatus": "1.3.6.1.2.1.2.2.1.8",
-            "ifAdminStatus": "1.3.6.1.2.1.2.2.1.7",
-            "ifSpeed": "1.3.6.1.2.1.2.2.1.5",
-            "ifMtu": "1.3.6.1.2.1.2.2.1.4",
-            "ifPhysAddress": "1.3.6.1.2.1.2.2.1.6",
-        }
+            # OIDs for the different interface data we want to collect
+            oids = {
+                "ifDescr": "1.3.6.1.2.1.2.2.1.2",
+                "ifOperStatus": "1.3.6.1.2.1.2.2.1.8",
+                "ifAdminStatus": "1.3.6.1.2.1.2.2.1.7",
+                "ifSpeed": "1.3.6.1.2.1.2.2.1.5",
+                "ifMtu": "1.3.6.1.2.1.2.2.1.4",
+                "ifPhysAddress": "1.3.6.1.2.1.2.2.1.6",
+            }
 
-        # Get interface data
-        for oid_name, oid in oids.items():
-            results = self._snmp_get_multiple_with_index(oid)
-            if results is None:
-                return {}
+            # Get interface data
+            for oid_name, oid in oids.items():
+                results = self._snmp_get_multiple_with_index(oid)
+                if results is None:
+                    return {}
 
-            for interface_index, interface_value in results:
-                if interface_index not in interfaces:
-                    interfaces[interface_index] = {}
-                interfaces[interface_index][oid_name] = interface_value
+                for interface_index, interface_value in results:
+                    if interface_index not in interfaces:
+                        interfaces[interface_index] = {}
+                    interfaces[interface_index][oid_name] = interface_value
 
-        # Post-process the interface data
-        processed_interfaces = {}
-        for interface_index, interface in interfaces.items():
-            interface["is_up"] = interface.pop("ifOperStatus") == "1"
-            interface["is_enabled"] = interface.pop("ifAdminStatus") == "1"
-            interface["description"] = interface.pop("ifDescr")
-            interface["last_flapped"] = -1.0  # SNMP doesn't provide this data
-            interface["speed"] = (
-                float(interface.pop("ifSpeed", 0)) / 1000000.0
-            )  # Convert speed from bps to Mbps
-            interface["mtu"] = int(interface.pop("ifMtu", 0))
+            # Post-process the interface data
+            processed_interfaces = {}
+            for interface_index, interface in interfaces.items():
+                interface["is_up"] = interface.pop("ifOperStatus") == "1"
+                interface["is_enabled"] = interface.pop("ifAdminStatus") == "1"
+                interface["description"] = interface.pop("ifDescr")
+                interface["last_flapped"] = -1.0  # SNMP doesn't provide this data
+                interface["speed"] = (
+                    float(interface.pop("ifSpeed", 0)) / 1000000.0
+                )  # Convert speed from bps to Mbps
+                interface["mtu"] = int(interface.pop("ifMtu", 0))
 
-            if "ifPhysAddress" in interface:
-                phys_addr = interface.pop("ifPhysAddress")
-                # Ensure the MAC address has correct length and format
-                if phys_addr.startswith("0x"):
-                    # Convert hexadecimal string to proper MAC format
-                    formatted_mac = ":".join(
-                        [phys_addr[i : i + 2] for i in range(2, len(phys_addr), 2)]
-                    )
-                    interface["mac_address"] = formatted_mac
+                if "ifPhysAddress" in interface:
+                    phys_addr = interface.pop("ifPhysAddress")
+                    # Ensure the MAC address has correct length and format
+                    if phys_addr.startswith("0x"):
+                        # Convert hexadecimal string to proper MAC format
+                        formatted_mac = ":".join(
+                            [phys_addr[i : i + 2] for i in range(2, len(phys_addr), 2)]
+                        )
+                        interface["mac_address"] = formatted_mac
+                    else:
+                        interface["mac_address"] = ""
                 else:
                     interface["mac_address"] = ""
-            else:
-                interface["mac_address"] = ""
 
-            interface_name = interface["description"]
-            processed_interfaces[interface_name] = interface
+                interface_name = interface["description"]
+                processed_interfaces[interface_name] = interface
 
-        return processed_interfaces
+            return processed_interfaces
+        except Exception as e:
+            return f"Error getting interfaces: {e}"
 
     def get_interfaces_ip(self):
-        interfaces_ip = {}
+        try:
+            interfaces_ip = {}
 
-        # OIDs for the different interface IP data we want to collect
-        oids = {
-            "mimosa_local_ip": ".1.3.6.1.4.1.43356.2.1.2.5.8.0",
-            "mimosa_netmask": ".1.3.6.1.4.1.43356.2.1.2.5.9.0",
-        }
+            # Retrieve the IP address and netmask from the device
+            ip_address = self._snmp_get(self.OIDs["mimosa_local_ip"])
+            netmask = self._snmp_get(self.OIDs["mimosa_netmask"])
 
-        # Retrieve the IP address and netmask from the device
-        ip_address = self._snmp_get(oids["mimosa_local_ip"])
-        netmask = self._snmp_get(oids["mimosa_netmask"])
-        # Convert the netmask to a prefix length
-        network = ip_network(f"{ip_address}/{netmask}", strict=False)
-        prefix_length = network.prefixlen
+            # Convert the netmask to a prefix length
+            network = ip_network(f"{ip_address}/{netmask}", strict=False)
+            prefix_length = network.prefixlen
 
-        # Structure the returned data to match the example
-        interfaces_ip["br_local"] = {}
-        interfaces_ip["br_local"]["ipv4"] = {}
-        interfaces_ip["br_local"]["ipv4"][ip_address] = {"prefix_length": prefix_length}
+            # Structure the returned data to match the example
+            interfaces_ip["br_local"] = {}
+            interfaces_ip["br_local"]["ipv4"] = {}
+            interfaces_ip["br_local"]["ipv4"][ip_address] = {
+                "prefix_length": prefix_length
+            }
 
-        return interfaces_ip
+            return interfaces_ip
+        except Exception as e:
+            return f"Error getting interfaces ip: {e}"
 
     def get_wireless_settings(self):
-        wan_status_mapping = {
-            "1": "connected",
-            "2": "disconnected",
-        }
+        try:
+            if self.radio_type == "ptp":
+                ptp_wireless_settings = {
+                    "unlock_code": self._snmp_get(self.OIDs["unlock_code"]),
+                    "regulatory_domain": self._snmp_get(self.OIDs["regulatory_domain"]),
+                    "wan_ssid": self._snmp_get(self.OIDs["wan_ssid"]),
+                    "wan_status": self.wan_status_mapping.get(
+                        self._snmp_get(self.OIDs["wan_status"]), "unknown"
+                    ),
+                    "wireless_mode": self.wireless_mode_mapping.get(
+                        self._snmp_get(self.OIDs["wireless_mode"]), "unknown"
+                    ),
+                    "tdma_mode": self.tdma_mode_mapping.get(
+                        self._snmp_get(self.OIDs["tdma_mode"]), "unknown"
+                    ),
+                    "tdma_window": self._snmp_get(self.OIDs["tdma_window"]),
+                    "traffic_split": self.traffic_split_mapping.get(
+                        self._snmp_get(self.OIDs["traffic_split"]), "unknown"
+                    ),
+                    "network_mode": self.network_mode_mapping.get(
+                        self._snmp_get(self.OIDs["network_mode"]), "unknown"
+                    ),
+                    "recovery_ssid": self._snmp_get(self.OIDs["recovery_ssid"]),
+                    "local_ssid": self._snmp_get(self.OIDs["local_ssid"]),
+                    "local_channel": self._snmp_get(self.OIDs["local_channel"]),
+                }
+                return ptp_wireless_settings
 
-        wireless_mode_mapping = {
-            "1": "accessPoint",
-            "2": "station",
-        }
+            elif self.radio_type == "ptmp":
+                ssid_list = self._snmp_get_multiple_with_index(
+                    oid=".1.3.6.1.4.1.43356.2.1.2.9.1.1"
+                )
 
-        tdma_mode_mapping = {
-            "1": "a",
-            "2": "b",
-        }
+                processed_ssid_list = {}
 
-        traffic_split_mapping = {
-            "1": "symmetric",
-            "2": "asymmetric",
-            "3": "auto",
-        }
+                property_names = [
+                    "mimosaPtmpSsidName",
+                    "mimosaPtmpSsidType",
+                    "mimosaPtmpSsidEnabled",
+                    "mimosaPtmpSsidBroadcastEnabled",
+                    "mimosaPtmpSsidIsolationEnabled",
+                ]
 
-        network_mode_mapping = {
-            "1": "enabled",
-            "2": "disabled",
-            "3": "auto",
-        }
+                for index, value in ssid_list:
+                    if index not in processed_ssid_list:
+                        processed_ssid_list[index] = {}
+                        continue
 
-        wireless_settings = {
-            "unlock_code": self._snmp_get(".1.3.6.1.4.1.43356.2.1.2.1.6.0"),
-            "regulatory_domain": self._snmp_get(".1.3.6.1.4.1.43356.2.1.2.1.9.0"),
-            "wan_ssid": self._snmp_get(".1.3.6.1.4.1.43356.2.1.2.3.1.0"),
-            "wan_status": wan_status_mapping.get(
-                self._snmp_get(".1.3.6.1.4.1.43356.2.1.2.3.3.0"), "unknown"
-            ),
-            "wireless_mode": wireless_mode_mapping.get(
-                self._snmp_get(".1.3.6.1.4.1.43356.2.1.2.4.1.0"), "unknown"
-            ),
-            "tdma_mode": tdma_mode_mapping.get(
-                self._snmp_get(".1.3.6.1.4.1.43356.2.1.2.4.2.0"), "unknown"
-            ),
-            "tdma_window": self._snmp_get(".1.3.6.1.4.1.43356.2.1.2.4.4.0"),
-            "traffic_split": traffic_split_mapping.get(
-                self._snmp_get(".1.3.6.1.4.1.43356.2.1.2.4.5.0"), "unknown"
-            ),
-            "network_mode": network_mode_mapping.get(
-                self._snmp_get(".1.3.6.1.4.1.43356.2.1.2.5.1.0"), "unknown"
-            ),
-            "recovery_ssid": self._snmp_get(".1.3.6.1.4.1.43356.2.1.2.5.2.0"),
-            "local_ssid": self._snmp_get(".1.3.6.1.4.1.43356.2.1.2.5.3.0"),
-            "local_channel": self._snmp_get(".1.3.6.1.4.1.43356.2.1.2.5.4.0 "),
-        }
-        return wireless_settings
+                    if len(processed_ssid_list[index]) == 1:
+                        value = self.ptmp_ssid_type_mapping.get(value, value)
+
+                    else:
+                        value = self.ptmp_true_false_mapping.get(value, value)
+
+                    property_name = property_names[len(processed_ssid_list[index])]
+
+                    processed_ssid_list[index][property_name] = value
+
+                channel_power_table = self._snmp_get_multiple_with_index(
+                    oid=".1.3.6.1.4.1.43356.2.1.2.9.3.3"
+                )
+
+                processed_channel_power_table = {}
+
+                channel_power_property_names = [
+                    "mimosaPtmpChPwrRadioName",
+                    "mimosaPtmpChPwrCntrFreqCfg",
+                    "mimosaPtmpChPwrPrimChannelCfg",
+                    "mimosaPtmpChPwrChWidthCfg",
+                    "mimosaPtmpChPwrTxPowerCfg",
+                    "mimosaPtmpChPwrCntrFreqCur",
+                    "mimosaPtmpChPwrPrimChannelCur",
+                    "mimosaPtmpChPwrChWidthCur",
+                    "mimosaPtmpChPwrTxPowerCur",
+                    "mimosaPtmpChPwrAgcMode",
+                    "mimosaPtmpChPwrMinRxPower",
+                ]
+
+                for index, value in channel_power_table:
+                    if index not in processed_channel_power_table:
+                        processed_channel_power_table[index] = {}
+                        continue
+
+                    if len(processed_channel_power_table[index]) == 9:
+                        value = self.ptmp_on_off_mapping.get(value, value)
+
+                    property_name = channel_power_property_names[
+                        len(processed_channel_power_table[index])
+                    ]
+
+                    processed_channel_power_table[index][property_name] = value
+
+                ptmp_wireless_settings = {
+                    "unlock_code": self._snmp_get(self.OIDs["unlock_code"]),
+                    "regulatory_domain": self._snmp_get(self.OIDs["regulatory_domain"]),
+                    "mimosa_wireless_mode": self.ptmp_wireless_mode_mapping.get(
+                        self._snmp_get(self.OIDs["mimosa_wireless_mode"]), "unknown"
+                    ),
+                    "mimosa_auto_channel": self.ptmp_true_false_mapping.get(
+                        self._snmp_get(self.OIDs["mimosa_auto_channel"]), "unknown"
+                    ),
+                    "ssid_table": processed_ssid_list,
+                    "channel_power_table": processed_channel_power_table,
+                }
+
+                return ptmp_wireless_settings
+        except Exception as e:
+            return f"Error getting wireless settings: {e}"
 
     def get_dns_servers(self):
-        dns_servers = {
-            "primary_dns_server": self._snmp_get(".1.3.6.1.4.1.43356.2.1.2.5.12.0"),
-            "secondary_dns_server": self._snmp_get(".1.3.6.1.4.1.43356.2.1.2.5.13.0"),
-        }
+        try:
+            if self.radio_type == "ptp":
+                dns_servers = {
+                    "primary_dns_server": self._snmp_get(
+                        self.OIDs["primary_dns_server"]
+                    ),
+                    "secondary_dns_server": self._snmp_get(
+                        self.OIDs["secondary_dns_server"]
+                    ),
+                }
+            elif self.radio_type == "ptmp":
+                dns_servers = {
+                    "primary_dns_server": self._snmp_get(
+                        self.OIDs["primary_dns_server"]
+                    ),
+                    "secondary_dns_server": self._snmp_get(
+                        self.OIDs["secondary_dns_server"]
+                    ),
+                }
 
-        return dns_servers
+            return dns_servers
+        except Exception as e:
+            return f"Error getting DNS servers: {e}"
 
     def get_services(self):
-        https_status_mapping = {
-            "1": "enabled",
-            "2": "disabled",
-        }
+        try:
+            if self.radio_type == "ptp":
+                services = {
+                    "https_status": self.enabled_disabled_mapping.get(
+                        self._snmp_get(self.OIDs["https_status"]), "unknown"
+                    ),
+                    "mgmt_vlan_status": self.enabled_disabled_mapping.get(
+                        self._snmp_get(self.OIDs["mgmt_vlan_status"]), "unknown"
+                    ),
+                    "mgmt_cloud_status": self.enabled_disabled_mapping.get(
+                        self._snmp_get(self.OIDs["mgmt_cloud_status"]), "unknown"
+                    ),
+                    "syslog_status": self.enabled_disabled_mapping.get(
+                        self._snmp_get(self.OIDs["syslog_status"]), "unknown"
+                    ),
+                }
 
-        mgmt_vlan_mapping = {
-            "1": "enabled",
-            "2": "disabled",
-        }
+            elif self.radio_type == "ptmp":
+                services = {
+                    "mgmt_vlan_status": self.enabled_disabled_mapping.get(
+                        self._snmp_get(self.OIDs["mgmt_vlan_status"]), "unknown"
+                    ),
+                    "mgmt_vlan_passthrough": self.enabled_disabled_mapping.get(
+                        self._snmp_get(self.OIDs["mgmt_vlan_passthrough"]), "unknown"
+                    ),
+                }
 
-        mgmt_cloud_mapping = {
-            "1": "enabled",
-            "2": "disabled",
-        }
-
-        syslog_mapping = {
-            "1": "enabled",
-            "2": "disabled",
-        }
-
-        services = {
-            "https_status": https_status_mapping.get(
-                self._snmp_get(".1.3.6.1.4.1.43356.2.1.2.8.1.0"), "unknown"
-            ),
-            "mgmt_vlan_status": mgmt_vlan_mapping.get(
-                self._snmp_get(".1.3.6.1.4.1.43356.2.1.2.8.2.0"), "unknown"
-            ),
-            "mgmt_cloud_status": mgmt_cloud_mapping.get(
-                self._snmp_get(".1.3.6.1.4.1.43356.2.1.2.8.3.0"), "unknown"
-            ),
-            "syslog_status": syslog_mapping.get(
-                self._snmp_get(".1.3.6.1.4.1.43356.2.1.2.8.6.0"), "unknown"
-            ),
-        }
-
-        return services
+            return services
+        except Exception as e:
+            return f"Error getting services: {e}"
