@@ -22,6 +22,7 @@ This is a custom NAPALM driver which is designed to use SNMP (Simple Network Man
 ## Usage
 
 Here is a basic usage example:
+radio_type='a_series' or 'b_c_series'
 
 ```python
 from napalm import get_network_driver
@@ -29,7 +30,7 @@ from napalm import get_network_driver
 driver = get_network_driver('mimosa')
 device = driver(
     snmp_community='your_community', 
-    radio_type='ptp', 
+    radio_type='a_series', 
     hostname='your_hostname'
 )
 
@@ -37,7 +38,7 @@ device = driver(
 print(device.get_facts())
 ```
 
-Please replace `'your_community'`, `'ptp'` and `'your_hostname'` with your SNMP community, radio type, and hostname respectively.
+Please replace `'your_community'`, `'a_series'` and `'your_hostname'` with your SNMP community, radio type, and hostname respectively.
 
 ## Features
 

@@ -9,12 +9,11 @@ Please refer to napalm.readthedocs.org for more information.
 from napalm.base.base import NetworkDriver
 from pysnmp.hlapi import *
 from ipaddress import ip_network
-from rich import print
 
 
 class MimosaDriver(NetworkDriver):
-    ptp_OIDs = {
-        # OIDs for the ptp series
+    b_c_series_OIDs = {
+        # OIDs for the b and c series
         "unlock_code": ".1.3.6.1.4.1.43356.2.1.2.1.6.0",
         "regulatory_domain": ".1.3.6.1.4.1.43356.2.1.2.1.9.0",
         "wan_ssid": ".1.3.6.1.4.1.43356.2.1.2.3.1.0",
@@ -31,10 +30,14 @@ class MimosaDriver(NetworkDriver):
         "mimosa_netmask": ".1.3.6.1.4.1.43356.2.1.2.5.9.0",
         "primary_dns_server": ".1.3.6.1.4.1.43356.2.1.2.5.12.0",
         "secondary_dns_server": ".1.3.6.1.4.1.43356.2.1.2.5.13.0",
+        "https_status": ".1.3.6.1.4.1.43356.2.1.2.8.1.0",
+        "mgmt_vlan_status": ".1.3.6.1.4.1.43356.2.1.2.8.2.0",
+        "mgmt_cloud_status": ".1.3.6.1.4.1.43356.2.1.2.8.3.0",
+        "syslog_status": ".1.3.6.1.4.1.43356.2.1.2.8.6.0",
     }
 
-    ptmp_OIDs = {
-        # OIDs for the ptmp series
+    a_series_OIDs = {
+        # OIDs for the a series
         "unlock_code": ".1.3.6.1.4.1.43356.2.1.2.1.6.0",
         "regulatory_domain": ".1.3.6.1.4.1.43356.2.1.2.1.9.0",
         "mimosa_local_ip": ".1.3.6.1.4.1.43356.2.1.2.9.7.1.0",
@@ -80,6 +83,11 @@ class MimosaDriver(NetworkDriver):
         "0": "disabled",
     }
 
+    enabled_disabled_mapping_backup = {
+        "1": "enabled",
+        "2": "disabled",
+    }
+
     ptmp_true_false_mapping = {"1": "true", "2": "false"}
 
     ptmp_wireless_mode_mapping = {
@@ -103,7 +111,7 @@ class MimosaDriver(NetworkDriver):
     ) -> None:
         """
         :param snmp_community: SNMP community string
-        :param radio_type: Type of radio, either "ptp" or "ptmp"
+        :param radio_type: Type of radio, either "a_series" or "b_c_series"
         :param hostname: IP or FQDN of the device you want to connect to.
         :param username: No username required for SNMP
         :param password: No password required for SNMP
@@ -116,11 +124,15 @@ class MimosaDriver(NetworkDriver):
         self.timeout = timeout
         self.snmp_community = snmp_community
         self.radio_type = radio_type
-        self.OIDs = self.ptp_OIDs if self.radio_type == "ptp" else self.ptmp_OIDs
+        self.OIDs = (
+            self.b_c_series_OIDs
+            if self.radio_type == "b_c_series"
+            else self.a_series_OIDs
+        )
         self.validate_series()
 
     def validate_series(self):
-        radio_type = ["ptp", "ptmp"]
+        radio_type = ["a_series", "b_c_series"]
         if self.radio_type not in radio_type:
             raise ValueError(f"Invalid series. Series should be one of {radio_type}")
 
@@ -331,7 +343,7 @@ class MimosaDriver(NetworkDriver):
 
     def get_wireless_settings(self):
         try:
-            if self.radio_type == "ptp":
+            if self.radio_type == "b_c_series":
                 ptp_wireless_settings = {
                     "unlock_code": self._snmp_get(self.OIDs["unlock_code"]),
                     "regulatory_domain": self._snmp_get(self.OIDs["regulatory_domain"]),
@@ -358,7 +370,7 @@ class MimosaDriver(NetworkDriver):
                 }
                 return ptp_wireless_settings
 
-            elif self.radio_type == "ptmp":
+            elif self.radio_type == "a_series":
                 ssid_list = self._snmp_get_multiple_with_index(
                     oid=".1.3.6.1.4.1.43356.2.1.2.9.1.1"
                 )
@@ -441,7 +453,7 @@ class MimosaDriver(NetworkDriver):
 
     def get_dns_servers(self):
         try:
-            if self.radio_type == "ptp":
+            if self.radio_type == "b_c_series":
                 dns_servers = {
                     "primary_dns_server": self._snmp_get(
                         self.OIDs["primary_dns_server"]
@@ -450,7 +462,7 @@ class MimosaDriver(NetworkDriver):
                         self.OIDs["secondary_dns_server"]
                     ),
                 }
-            elif self.radio_type == "ptmp":
+            elif self.radio_type == "a_series":
                 dns_servers = {
                     "primary_dns_server": self._snmp_get(
                         self.OIDs["primary_dns_server"]
@@ -466,23 +478,23 @@ class MimosaDriver(NetworkDriver):
 
     def get_services(self):
         try:
-            if self.radio_type == "ptp":
+            if self.radio_type == "b_c_series":
                 services = {
-                    "https_status": self.enabled_disabled_mapping.get(
+                    "https_status": self.enabled_disabled_mapping_backup.get(
                         self._snmp_get(self.OIDs["https_status"]), "unknown"
                     ),
-                    "mgmt_vlan_status": self.enabled_disabled_mapping.get(
+                    "mgmt_vlan_status": self.enabled_disabled_mapping_backup.get(
                         self._snmp_get(self.OIDs["mgmt_vlan_status"]), "unknown"
                     ),
-                    "mgmt_cloud_status": self.enabled_disabled_mapping.get(
+                    "mgmt_cloud_status": self.enabled_disabled_mapping_backup.get(
                         self._snmp_get(self.OIDs["mgmt_cloud_status"]), "unknown"
                     ),
-                    "syslog_status": self.enabled_disabled_mapping.get(
+                    "syslog_status": self.enabled_disabled_mapping_backup.get(
                         self._snmp_get(self.OIDs["syslog_status"]), "unknown"
                     ),
                 }
 
-            elif self.radio_type == "ptmp":
+            elif self.radio_type == "a_series":
                 services = {
                     "mgmt_vlan_status": self.enabled_disabled_mapping.get(
                         self._snmp_get(self.OIDs["mgmt_vlan_status"]), "unknown"
