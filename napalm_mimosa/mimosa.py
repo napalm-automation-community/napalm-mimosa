@@ -245,8 +245,8 @@ class MimosaDriver(NetworkDriver):
                 "model": model_map.get(
                     sysObjectID, "Unknown"
                 ),  # map the sysObjectID to a model
-                "hostname": self._snmp_get(".1.3.6.1.2.1.1.5.0"),
-                "fqdn": self._snmp_get(".1.3.6.1.2.1.1.5.0"),
+                "hostname": self._snmp_get(".1.3.6.1.4.1.43356.2.1.2.1.1.0"),
+                "fqdn": self._snmp_get(".1.3.6.1.4.1.43356.2.1.2.1.1.0"),
                 "interface_list": self.get_interfaces_list(),
             }
             return facts
