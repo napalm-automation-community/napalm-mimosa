@@ -51,6 +51,22 @@ class MimosaDriver(NetworkDriver):
         "mgmt_vlan_passthrough": ".1.3.6.1.4.1.43356.2.1.2.9.7.9.0",
     }
 
+    interface_name_mapping = {
+        "eth1_emac1": "Ethernet0",
+        "eth1_emac2": "Fiber_SFP",
+        "wifi0": "Wireless0",
+        "lo": "Loopback0",
+        "tqe": "Tqe",
+        "wlan0": "Wlan0",
+        "br0": "Bridge0",
+        "br_local": "BridgeLocal",
+        "br_recovery": "BridgeRecovery",
+        "br1": "Bridge1",
+        "mon.wlan0": "MonitorWlan0",
+        "wifi1": "Wireless1",
+        "A5EthPort": "Ethernet0",
+    }
+
     wan_status_mapping = {
         "1": "connected",
         "2": "disconnected",
@@ -255,8 +271,13 @@ class MimosaDriver(NetworkDriver):
 
     def get_interfaces_list(self):
         try:
+            interface_list = []
             interfaces = self._snmp_get_multiple("1.3.6.1.2.1.2.2.1.2")
-            return interfaces if interfaces is not None else []
+            for intf in interfaces:
+                intf = self.interface_name_mapping.get(intf, intf)
+                interface_list.append(intf)
+
+            return interface_list if interfaces is not None else []
         except Exception as e:
             return f"Error getting interface list: {e}"
 
@@ -312,6 +333,10 @@ class MimosaDriver(NetworkDriver):
                     interface["mac_address"] = ""
 
                 interface_name = interface["description"]
+                interface_name = self.interface_name_mapping.get(
+                    interface_name, interface_name
+                )
+
                 processed_interfaces[interface_name] = interface
 
             return processed_interfaces
