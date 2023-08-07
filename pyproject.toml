@@ -7,8 +7,7 @@ readme = "README.md"
 packages = [{include = "napalm_mimosa"}]
 
 [tool.poetry.dependencies]
-python = "^3.10"
-napalm = "^4.1.0"
+python = "^3.8"
 pysnmp = "^4.4.12"
 pysnmp-pyasn1 = "^1.1.3"
 
