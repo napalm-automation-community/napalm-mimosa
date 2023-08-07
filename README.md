@@ -1,5 +1,3 @@
-# napalm-mimosa
-Mimosa Radios
 # Napalm-Mimosa
 
 A Network Automation and Programmability Abstraction Layer with Multivendor support (NAPALM) driver for Mimosa Radios.
