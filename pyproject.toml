@@ -1,0 +1,18 @@
+[tool.poetry]
+name = "napalm-mimosa"
+version = "0.1.0"
+description = "Network Automation and Programmability Abstraction Layer driver for Mimosa Radios."
+authors = ["Geury Torres <geuryt@yahoo.com>"]
+readme = "README.md"
+packages = [{include = "napalm_mimosa"}]
+
+[tool.poetry.dependencies]
+python = "^3.10"
+napalm = "^4.1.0"
+pysnmp = "^4.4.12"
+pysnmp-pyasn1 = "^1.1.3"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
